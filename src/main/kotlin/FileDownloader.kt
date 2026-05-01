@@ -38,12 +38,14 @@ data class FileMetadata(
     val supportsRanges: Boolean,
 )
 
+class NonRetryableHttpException(message: String) : Exception(message)
+
 class FileDownloader(private val client: HttpClient, private val config: DownloadConfig = DownloadConfig()) {
 
     private suspend fun fetchMetadata(url: String): FileMetadata {
         val response: HttpResponse = client.head(url)
         val contentLength = response.contentLength() ?: error("Server did not return Content-Length for $url")
-        val supportsRanges = response.headers[HttpHeaders.AcceptRanges] ?.contains("bytes") == true
+        val supportsRanges = response.headers[HttpHeaders.AcceptRanges]?.contains("bytes") == true
         return FileMetadata(contentLength, supportsRanges)
     }
 
@@ -61,6 +63,8 @@ class FileDownloader(private val client: HttpClient, private val config: Downloa
                 lastError = e
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: NonRetryableHttpException) {
+                throw e
             } catch (e: Exception) {
                 lastError = e
             }
@@ -76,7 +80,14 @@ class FileDownloader(private val client: HttpClient, private val config: Downloa
                         append(HttpHeaders.Range, "bytes=${chunk.start}-${chunk.endInclusive}")
                     }
                 }
-                check(response.status.value in 200..299) { "Chunk ${chunk.index} failed: HTTP ${response.status.value}" }
+                val status = response.status.value
+                when {
+                    status == 206 -> Unit
+                    status in 500..599 -> error("Chunk ${chunk.index}: server error HTTP $status")
+                    else -> throw NonRetryableHttpException(
+                        "Chunk ${chunk.index}: server returned HTTP $status for ranged GET (expected 206 Partial Content)"
+                    )
+                }
                 response.body<ByteArray>()
             }
         }

@@ -181,4 +181,53 @@ class FileDownloaderTest {
         }
         assertEquals(testConfig.retries + 1, attempts.get(), "should attempt initial + retries")
     }
+
+    @Test
+    fun `rejects 200 OK on a ranged GET (server ignored Range header)`() = runBlocking {
+        val body = ByteArray(100) { it.toByte() }
+        val attempts = AtomicInteger(0)
+        val client = HttpClient(MockEngine { request ->
+            when (request.method) {
+                HttpMethod.Head -> respond(
+                    content = byteArrayOf(),
+                    status = HttpStatusCode.OK,
+                    headers = headHeaders(body.size),
+                )
+                HttpMethod.Get -> {
+                    attempts.incrementAndGet()
+                    respond(body, HttpStatusCode.OK)
+                }
+                else -> error("Unexpected method ${request.method}")
+            }
+        })
+
+        assertFailsWith<NonRetryableHttpException> {
+            FileDownloader(client, testConfig).download("http://test/file", destination())
+        }
+        assertEquals(1, attempts.get(), "200 OK on a ranged GET must not be retried")
+    }
+
+    @Test
+    fun `does not retry on 4xx response`() = runBlocking {
+        val attempts = AtomicInteger(0)
+        val client = HttpClient(MockEngine { request ->
+            when (request.method) {
+                HttpMethod.Head -> respond(
+                    content = byteArrayOf(),
+                    status = HttpStatusCode.OK,
+                    headers = headHeaders(100),
+                )
+                HttpMethod.Get -> {
+                    attempts.incrementAndGet()
+                    respond(byteArrayOf(), HttpStatusCode.NotFound)
+                }
+                else -> error("Unexpected method ${request.method}")
+            }
+        })
+
+        assertFailsWith<NonRetryableHttpException> {
+            FileDownloader(client, testConfig).download("http://test/file", destination())
+        }
+        assertEquals(1, attempts.get(), "404 must not be retried")
+    }
 }

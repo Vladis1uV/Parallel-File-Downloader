@@ -21,9 +21,13 @@ and per-chunk timeout.
 
 Per-chunk reliability:
 - `withTimeout(timeoutPerChunk)` cancels a stuck request.
-- `withRetry { ... }` retries transient failures (timeouts, network errors,
-  non-2xx) with exponential backoff. `CancellationException` from outside is
-  always re-thrown, never retried.
+- A chunk response must be `206 Partial Content`. `5xx` is treated as a
+  transient server error and retried. Anything else (including a `200 OK`
+  that means the server ignored the `Range` header, or any `4xx`) is a
+  `NonRetryableHttpException` — failed once, no retries, fail fast.
+- `withRetry { ... }` retries timeouts and IO/network errors with
+  exponential backoff (100 ms × 4ⁿ). `CancellationException` from outside
+  is always re-thrown, never retried.
 
 ## Project layout
 
@@ -35,9 +39,10 @@ src/main/kotlin/
 
 src/test/kotlin/
     ChunkPlannerTest.kt    11 tests covering off-by-ones, edge sizes, validation
-    FileDownloaderTest.kt  6 tests using Ktor MockEngine: assembly,
+    FileDownloaderTest.kt  8 tests using Ktor MockEngine: assembly,
                            Range headers, Accept-Ranges check, parallelism cap,
-                           retry success, retry exhaustion
+                           retry success, retry exhaustion, reject 200-on-range,
+                           no-retry on 4xx
 ```
 
 ## Build
